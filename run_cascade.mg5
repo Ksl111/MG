@@ -1,0 +1,25 @@
+#***********************************************************************
+# MadGraph5 command file: каскадный (полный) расчет
+#
+# Процесс: p p > go go, go > t t~ grv a
+#
+# Стратегия: Полный расчет с каскадным распадом на уровне
+#            матричных элементов. Это МЕДЛЕННЫЙ способ.
+#            Используется для сравнения/бенчмарка.
+#***********************************************************************
+
+# Импорт модели GldGrv_UFO
+import model GldGrv_UFO
+
+# Определяем полный каскадный процесс
+# go > t t~ grv a — задан как decay chain
+generate p p > go go, go > t t~ grv a
+
+# Генерация кода
+output /eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams/pp_gogo_cascade
+
+# Запускаем генерацию событий
+launch /eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams/pp_gogo_cascade
+
+# Оставляем параметры стандартными (default param_card)
+0
