@@ -1,0 +1,33 @@
+#***********************************************************************
+# MadGraph5 command file: раздельный расчет (production + decay)
+#
+# Процесс: p p > go go  (production)
+#           go > t t~ grv a (decay, задается через MadSpin или decay chain)
+#
+# Стратегия: Генерация p p > go go на уровне матричных элементов,
+#            распады задаются через MadSpin (madspin) — факторизованный подход.
+#            Это БЫСТРЫЙ способ расчета.
+#***********************************************************************
+
+# Импорт модели GldGrv_UFO
+import model GldGrv_UFO
+
+# Определяем основной процесс — парное рождение глюино
+generate p p > go go
+
+# Генерация кода
+output /eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams/pp_gogo_production
+
+# Запускаем генерацию событий
+launch /eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams/pp_gogo_production
+
+# Включаем MadSpin для распадов
+madspin=ON
+# Оставляем параметры стандартными (default param_card)
+0
+
+# --- Настройки MadSpin (распады глюино) ---
+# MadSpin прочтет этот блок автоматически
+# Задаем распад глюино: go > t t~ grv a
+decay go > t t~ grv a
+done
