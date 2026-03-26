@@ -272,22 +272,33 @@ rm -rf "$BENCHMARK_DIR/tmp_t1b"
 
 # ============================================================================
 # TEST 2: Launch MadSpin при разном числе событий (10, 100, 10000)
-#         + извлечение сечения
+#         output один раз, затем только launch с разным nevents
 # ============================================================================
 log "========== TEST 2: MadSpin launch scaling (nevents) =========="
 {
     echo "TEST 2: MadSpin Launch — nevents scaling + cross-section"
     echo "  Process: p p > go go, decay via MadSpin: go > t t~ grv a"
+    echo "  Strategy: output ONCE, then launch N times with different nevents"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
-for NEV in 10 100 10000; do
-    LABEL="t2_madspin_${NEV}ev"
-    cat > "$BENCHMARK_DIR/${LABEL}.mg5" <<EOF
+# 2a: output один раз
+MADSPIN_OUTPUT_DIR="$BENCHMARK_DIR/tmp_t2_madspin"
+cat > "$BENCHMARK_DIR/t2_output.mg5" <<EOF
 import model GldGrv_UFO
 generate p p > go go
-output $BENCHMARK_DIR/tmp_${LABEL}
-launch $BENCHMARK_DIR/tmp_${LABEL}
+output $MADSPIN_OUTPUT_DIR
+EOF
+run_test "t2_madspin_output" "$BENCHMARK_DIR/t2_output.mg5" "$BENCHMARK_DIR/t2_output.log" "t2_madspin_output"
+T2_OUTPUT_TIME=$TEST_TIME
+
+# 2b: launch с разным числом событий (каждый раз из готового output)
+for NEV in 10 100 10000; do
+    LABEL="t2_madspin_${NEV}ev"
+
+    # MG5 позволяет launch из уже существующей директории
+    cat > "$BENCHMARK_DIR/${LABEL}.mg5" <<EOF
+launch $MADSPIN_OUTPUT_DIR
 madspin=ON
 set nevents $NEV
 0
@@ -296,39 +307,60 @@ done
 EOF
     run_test "$LABEL" "$BENCHMARK_DIR/${LABEL}.mg5" "$BENCHMARK_DIR/${LABEL}.log" "${LABEL}" 7200
     echo "${LABEL},madspin,${NEV},${TEST_TIME},${TEST_XSEC},${TEST_STATUS}" >> "$CSV_XSEC"
-    rm -rf "$BENCHMARK_DIR/tmp_${LABEL}"
 done
 
+rm -rf "$MADSPIN_OUTPUT_DIR"
 echo "" >> "$RESULTS_FILE"
 
 # ============================================================================
 # TEST 3: Launch Cascade при разном числе событий (10, 100, 10000)
-#         + извлечение сечения
+#         output один раз, затем только launch с разным nevents
 # ============================================================================
 log "========== TEST 3: Cascade launch scaling (nevents) =========="
 {
     echo "TEST 3: Cascade Launch — nevents scaling + cross-section"
     echo "  Process: p p > go go, go > t t~ grv a (full ME)"
+    echo "  Strategy: output ONCE, then launch N times with different nevents"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
-for NEV in 10 100 10000; do
-    LABEL="t3_cascade_${NEV}ev"
-    cat > "$BENCHMARK_DIR/${LABEL}.mg5" <<EOF
+# 3a: output один раз (каскадный — это тяжёлая часть)
+CASCADE_OUTPUT_DIR="$BENCHMARK_DIR/tmp_t3_cascade"
+cat > "$BENCHMARK_DIR/t3_output.mg5" <<EOF
 import model GldGrv_UFO
 generate p p > go go, go > t t~ grv a
-output $BENCHMARK_DIR/tmp_${LABEL}
-launch $BENCHMARK_DIR/tmp_${LABEL}
+output $CASCADE_OUTPUT_DIR
+EOF
+run_test "t3_cascade_output" "$BENCHMARK_DIR/t3_output.mg5" "$BENCHMARK_DIR/t3_output.log" "t3_cascade_output" 3600
+T3_OUTPUT_TIME=$TEST_TIME
+
+# 3b: launch с разным числом событий (каждый раз из готового output)
+for NEV in 10 100 10000; do
+    LABEL="t3_cascade_${NEV}ev"
+
+    cat > "$BENCHMARK_DIR/${LABEL}.mg5" <<EOF
+launch $CASCADE_OUTPUT_DIR
 set nevents $NEV
 0
 EOF
-    # 10000 событий каскада может быть очень долго — ограничим 2 часа
     run_test "$LABEL" "$BENCHMARK_DIR/${LABEL}.mg5" "$BENCHMARK_DIR/${LABEL}.log" "${LABEL}" 7200
     echo "${LABEL},cascade,${NEV},${TEST_TIME},${TEST_XSEC},${TEST_STATUS}" >> "$CSV_XSEC"
-    rm -rf "$BENCHMARK_DIR/tmp_${LABEL}"
 done
 
+rm -rf "$CASCADE_OUTPUT_DIR"
 echo "" >> "$RESULTS_FILE"
+
+# Сравнение output-фазы
+{
+    echo "  >> Output phase comparison:"
+    echo "     MadSpin output (p p > go go):             ${T2_OUTPUT_TIME}s ($(format_time $T2_OUTPUT_TIME))"
+    echo "     Cascade output (p p > go go, go > ...):   ${T3_OUTPUT_TIME}s ($(format_time $T3_OUTPUT_TIME))"
+    if [ "$T2_OUTPUT_TIME" -gt 0 ]; then
+        RATIO=$(awk "BEGIN{printf \"%.1f\", $T3_OUTPUT_TIME/$T2_OUTPUT_TIME}")
+        echo "     Cascade output is ${RATIO}x slower"
+    fi
+    echo ""
+} | tee -a "$RESULTS_FILE"
 
 # ============================================================================
 # TEST 4: Процессы с go в конечном состоянии
