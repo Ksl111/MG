@@ -231,46 +231,6 @@ echo "timestamp,stage,cpu_pct,rss_kb" > "$RESOURCE_LOG"
 start_resource_monitor
 
 # ============================================================================
-# TEST 1: Генерация диаграмм — MadSpin vs Cascade
-# ============================================================================
-log "========== TEST 1: Diagram Generation =========="
-{
-    echo "TEST 1: Diagram Generation (output only, no launch)"
-    echo "  MadSpin approach:  generate p p > go go"
-    echo "  Cascade approach:  generate p p > go go, go > t t~ grv a"
-    echo "-----------------------------------------------------------"
-} >> "$RESULTS_FILE"
-
-# 1a: MadSpin (только production)
-cat > "$BENCHMARK_DIR/t1a.mg5" <<EOF
-import model GldGrv_UFO
-generate p p > go go
-output $BENCHMARK_DIR/tmp_t1a
-EOF
-run_test "t1a_madspin_diagrams" "$BENCHMARK_DIR/t1a.mg5" "$BENCHMARK_DIR/t1a.log" "t1a_diag_madspin"
-T1A_TIME=$TEST_TIME
-rm -rf "$BENCHMARK_DIR/tmp_t1a"
-
-# 1b: Cascade
-cat > "$BENCHMARK_DIR/t1b.mg5" <<EOF
-import model GldGrv_UFO
-generate p p > go go, go > t t~ grv a
-output $BENCHMARK_DIR/tmp_t1b
-EOF
-run_test "t1b_cascade_diagrams" "$BENCHMARK_DIR/t1b.mg5" "$BENCHMARK_DIR/t1b.log" "t1b_diag_cascade" 3600
-T1B_TIME=$TEST_TIME
-rm -rf "$BENCHMARK_DIR/tmp_t1b"
-
-{
-    echo "  >> Comparison (diagram generation):"
-    if [ "$T1A_TIME" -gt 0 ]; then
-        RATIO=$(awk "BEGIN{printf \"%.1f\", $T1B_TIME/$T1A_TIME}")
-        echo "     Cascade is ${RATIO}x slower than MadSpin diagram gen"
-    fi
-    echo ""
-} | tee -a "$RESULTS_FILE"
-
-# ============================================================================
 # TEST 2: Launch MadSpin при разном числе событий (10, 100, 10000)
 #         output один раз, затем только launch с разным nevents
 # ============================================================================
