@@ -4,10 +4,10 @@
 #
 # Бенчмарк каскадного распада: p p > go go, go > t t~ grv a
 #
-# Этапы:
-#   1. Output (generate + compile) — один раз
-#   2. Launch при 10, 50, 100, 500, 1000, 5000, 10000 событиях
-#      с извлечением сечения и погрешности
+# Стратегия:
+#   - Используем существующий output с EOS (или генерируем новый)
+#   - Копируем output в /tmp (обход EOS FUSE path resolution бага)
+#   - Launch при 10, 50, 100, 500, 1000, 5000, 10000 событиях
 #
 # Мониторинг: CPU% + RAM (RSS) каждые 2 секунды с привязкой к этапу.
 ###############################################################################
@@ -19,6 +19,12 @@ MG5_DIR="/afs/cern.ch/user/k/kslizhev/public/MG5_aMC_v2_9_24"
 MG5_BIN="$MG5_DIR/bin/mg5_aMC"
 OUTPUT_DIR="/eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams"
 BENCHMARK_DIR="$OUTPUT_DIR/benchmark_cascade_decay"
+
+# Готовый output с предыдущего запуска (combined fallback создал его)
+EOS_OUTPUT_DIR="$BENCHMARK_DIR/tmp_combined_10"
+
+# Локальная копия output (обход EOS FUSE realpath бага)
+LOCAL_OUTPUT_DIR="/tmp/mg5_cascade_output_$$"
 
 RESULTS_FILE="$BENCHMARK_DIR/cascade_decay_results.txt"
 CSV_TIMING="$BENCHMARK_DIR/cascade_decay_timing.csv"
@@ -164,6 +170,8 @@ run_test() {
 # =========================== Cleanup ========================================
 cleanup() {
     stop_resource_monitor
+    log "Cleaning up local copy: $LOCAL_OUTPUT_DIR"
+    rm -rf "$LOCAL_OUTPUT_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -197,82 +205,71 @@ echo "timestamp,stage,cpu_pct,rss_kb" > "$RESOURCE_LOG"
 start_resource_monitor
 
 # ============================================================================
-# PHASE 1: Output + Launch в одном MG5-скрипте (для каждого nevents)
+# PHASE 1: Подготовка output-директории
 #
-# Стратегия: MG5 output+launch в одном сеансе, чтобы избежать
-# проблем с EOS FUSE path resolution при повторном launch.
-# Output генерируется один раз (первый запуск), далее reuse.
+# MG5 Python внутри launch делает os.path.realpath(), что на EOS FUSE
+# превращает /eos/user/k/... в /eos/home-k/... и ломает open().
+# Решение: копируем output в /tmp (локальная ФС, без symlink-проблем).
 # ============================================================================
+log "========== PHASE 1: Preparing output directory =========="
 
-PROC_DIR="$BENCHMARK_DIR/pp_gogo_cascade"
+# Проверяем существующий output на EOS
+if [ -d "$EOS_OUTPUT_DIR/SubProcesses" ]; then
+    log "  Found existing output at: $EOS_OUTPUT_DIR"
 
-# Сначала генерируем output
-log "========== PHASE 1: Output (p p > go go, go > t t~ grv a) =========="
+    # Копируем в /tmp для обхода EOS FUSE бага
+    log "  Copying to local: $LOCAL_OUTPUT_DIR ..."
+    set_stage "copy_to_local"
+    COPY_START=$(date +%s)
+    cp -a "$EOS_OUTPUT_DIR" "$LOCAL_OUTPUT_DIR"
+    COPY_END=$(date +%s)
+    COPY_TIME=$((COPY_END - COPY_START))
+    log "  Copy done in ${COPY_TIME}s"
+
+    OUTPUT_TIME=0  # output не генерировался заново
+else
+    log "  No existing output at $EOS_OUTPUT_DIR"
+    log "  Generating output from scratch (this takes ~35 min)..."
+
+    # Генерируем в /tmp напрямую — без EOS
+    cat > "$BENCHMARK_DIR/phase1_output.mg5" <<EOF
+import model GldGrv_UFO
+generate p p > go go, go > t t~ grv a
+output $LOCAL_OUTPUT_DIR
+EOF
+
+    run_test "output_generate" "$BENCHMARK_DIR/phase1_output.mg5" "$BENCHMARK_DIR/phase1_output.log" "phase1_output" 7200
+    OUTPUT_TIME=$TEST_TIME
+fi
+
+# Проверяем что output корректен
+if [ -f "$LOCAL_OUTPUT_DIR/SubProcesses/procdef_mg5.dat" ]; then
+    log "  Verified: procdef_mg5.dat exists at $LOCAL_OUTPUT_DIR/SubProcesses/"
+else
+    log "FATAL: procdef_mg5.dat not found at $LOCAL_OUTPUT_DIR/SubProcesses/"
+    log "  ls $LOCAL_OUTPUT_DIR/:"
+    ls -la "$LOCAL_OUTPUT_DIR/" 2>&1 | while IFS= read -r line; do log "    $line"; done
+    log "  ls SubProcesses/:"
+    ls "$LOCAL_OUTPUT_DIR/SubProcesses/" 2>&1 | head -20 | while IFS= read -r line; do log "    $line"; done
+    exit 1
+fi
+
 {
-    echo "PHASE 1: Output (generate + compile)"
-    echo "  Process: p p > go go, go > t t~ grv a"
+    echo "PHASE 1: Output preparation"
+    echo "  Source:  $EOS_OUTPUT_DIR"
+    echo "  Local:   $LOCAL_OUTPUT_DIR"
+    [ "$OUTPUT_TIME" -gt 0 ] && echo "  Generated in: $(format_time $OUTPUT_TIME)"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
-cat > "$BENCHMARK_DIR/phase1_output.mg5" <<EOF
-import model GldGrv_UFO
-generate p p > go go, go > t t~ grv a
-output $PROC_DIR
-EOF
-
-run_test "output_pp_gogo" "$BENCHMARK_DIR/phase1_output.mg5" "$BENCHMARK_DIR/phase1_output.log" "phase1_output"
-OUTPUT_TIME=$TEST_TIME
-
-# Диагностика: ищем где MG5 реально создал output
-log "  Diagnostics: checking output directory..."
-log "  Expected: $PROC_DIR"
-log "  ls of expected dir:"
-ls -la "$PROC_DIR/" 2>&1 | head -5 | while IFS= read -r line; do log "    $line"; done
-log "  ls SubProcesses:"
-ls "$PROC_DIR/SubProcesses/" 2>&1 | head -5 | while IFS= read -r line; do log "    $line"; done
-
-# Также проверяем resolved path
-RESOLVED_DIR=$(realpath "$PROC_DIR" 2>/dev/null || echo "$PROC_DIR")
-if [ "$RESOLVED_DIR" != "$PROC_DIR" ]; then
-    log "  Resolved via realpath: $RESOLVED_DIR"
-    log "  ls of resolved dir:"
-    ls -la "$RESOLVED_DIR/" 2>&1 | head -5 | while IFS= read -r line; do log "    $line"; done
-fi
-
-# Ищем procdef_mg5.dat
-FOUND_PROCDEF=$(find "$BENCHMARK_DIR" -name "procdef_mg5.dat" 2>/dev/null | head -3)
-if [ -n "$FOUND_PROCDEF" ]; then
-    log "  Found procdef_mg5.dat at:"
-    echo "$FOUND_PROCDEF" | while IFS= read -r line; do log "    $line"; done
-    # Берём директорию из первого найденного
-    PROC_DIR=$(dirname "$(dirname "$(echo "$FOUND_PROCDEF" | head -1)")")
-    log "  Using output dir: $PROC_DIR"
-else
-    # Ищем "Output to directory" в логе MG5
-    MG5_OUTPUT_LINE=$(grep -i "Output to directory" "$BENCHMARK_DIR/phase1_output.log" 2>/dev/null || true)
-    log "  MG5 output line from log: $MG5_OUTPUT_LINE"
-
-    # Пробуем извлечь путь из лога
-    MG5_REAL_DIR=$(grep -oP 'Output to directory\s+\K\S+' "$BENCHMARK_DIR/phase1_output.log" 2>/dev/null | tail -1 || true)
-    if [ -n "$MG5_REAL_DIR" ] && [ -d "$MG5_REAL_DIR" ]; then
-        PROC_DIR="$MG5_REAL_DIR"
-        log "  Using dir from MG5 log: $PROC_DIR"
-    else
-        log "  WARNING: Cannot locate output directory. Trying to proceed..."
-    fi
-fi
-
 # ============================================================================
-# PHASE 2: Launch при разном числе событий
-#
-# Каждый launch делается в отдельном MG5-сеансе из готового output.
-# Используем найденный PROC_DIR.
+# PHASE 2: Launch при разном числе событий из локальной копии
 # ============================================================================
 log "========== PHASE 2: Launch scaling (${NEVENTS_LIST[*]}) =========="
 {
     echo ""
     echo "PHASE 2: Launch with varying nevents"
-    echo "  Output directory: $PROC_DIR"
+    echo "  Output directory (local): $LOCAL_OUTPUT_DIR"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
@@ -280,35 +277,14 @@ for NEV in "${NEVENTS_LIST[@]}"; do
     LABEL="launch_${NEV}ev"
 
     cat > "$BENCHMARK_DIR/${LABEL}.mg5" <<EOF
-launch $PROC_DIR
+launch $LOCAL_OUTPUT_DIR
 set nevents $NEV
 0
 EOF
 
-    run_test "$LABEL" "$BENCHMARK_DIR/${LABEL}.mg5" "$BENCHMARK_DIR/${LABEL}.log" "${LABEL}" 7200
+    run_test "$LABEL" "$BENCHMARK_DIR/${LABEL}.mg5" "$BENCHMARK_DIR/${LABEL}.log" "${LABEL}" 14400
 
     echo "${NEV},${TEST_TIME},${TEST_XSEC},${TEST_XSEC_ERR},${TEST_STATUS}" >> "$CSV_XSEC"
-
-    # Проверяем на ошибку FileNotFoundError — если launch не работает,
-    # пробуем fallback: output+launch в одном скрипте
-    if grep -q "FileNotFoundError\|No such file" "$BENCHMARK_DIR/${LABEL}.log" 2>/dev/null; then
-        log "  [$LABEL] Separate launch failed (path issue). Falling back to combined output+launch..."
-
-        cat > "$BENCHMARK_DIR/${LABEL}_combined.mg5" <<EOF
-import model GldGrv_UFO
-generate p p > go go, go > t t~ grv a
-output $BENCHMARK_DIR/tmp_combined_${NEV}
-launch $BENCHMARK_DIR/tmp_combined_${NEV}
-set nevents $NEV
-0
-EOF
-        run_test "${LABEL}_combined" "$BENCHMARK_DIR/${LABEL}_combined.mg5" "$BENCHMARK_DIR/${LABEL}_combined.log" "${LABEL}_combined" 7200
-
-        # Перезаписываем результат в CSV (заменяем последнюю строку)
-        sed -i "$ s/.*/${NEV},${TEST_TIME},${TEST_XSEC},${TEST_XSEC_ERR},${TEST_STATUS}/" "$CSV_XSEC"
-
-        rm -rf "$BENCHMARK_DIR/tmp_combined_${NEV}" 2>/dev/null || true
-    fi
 
     if [ "$TEST_STATUS" = "timeout" ]; then
         log "  WARNING: Timeout at nevents=$NEV. Skipping larger runs."
@@ -424,7 +400,7 @@ BENCH_TOTAL=$((BENCH_END - BENCH_START))
     echo "  SUMMARY"
     echo "==============================================================================="
     echo ""
-    echo "  Output phase (generate + compile): ${OUTPUT_TIME}s ($(format_time $OUTPUT_TIME))"
+    [ "$OUTPUT_TIME" -gt 0 ] && echo "  Output phase (generate + compile): $(format_time $OUTPUT_TIME)"
     echo "  Total benchmark time: $(format_time $BENCH_TOTAL)"
     echo ""
     echo "  Output files:"
