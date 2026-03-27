@@ -110,6 +110,43 @@ stage_resource_summary() {
         }' "$RESOURCE_LOG"
 }
 
+# =========================== Resolve MG5 output dir =========================
+# resolve_mg5_output <expected_dir> <mg5_log_file>
+# Находит реальный путь к output-директории MG5 (EOS FUSE workaround).
+# Результат: RESOLVED_OUTPUT_DIR
+resolve_mg5_output() {
+    local EXPECTED_DIR="$1"
+    local MG5_LOG="$2"
+    local PROCDEF=""
+
+    # Пробуем оригинальный путь и realpath
+    for CAND in "$EXPECTED_DIR" "$(realpath "$EXPECTED_DIR" 2>/dev/null)"; do
+        [ -f "$CAND/SubProcesses/procdef_mg5.dat" ] && { PROCDEF="$CAND/SubProcesses/procdef_mg5.dat"; break; }
+    done
+
+    # Ищем в логе MG5 — куда он реально записал
+    if [ -z "$PROCDEF" ]; then
+        local MG5_DIR_FROM_LOG
+        MG5_DIR_FROM_LOG=$(grep -oP 'Output to directory\s+\K\S+' "$MG5_LOG" 2>/dev/null | tail -1 || true)
+        [ -n "$MG5_DIR_FROM_LOG" ] && [ -f "$MG5_DIR_FROM_LOG/SubProcesses/procdef_mg5.dat" ] && \
+            PROCDEF="$MG5_DIR_FROM_LOG/SubProcesses/procdef_mg5.dat"
+    fi
+
+    # find как последняя попытка
+    if [ -z "$PROCDEF" ]; then
+        PROCDEF=$(find "$(dirname "$EXPECTED_DIR")" -name "procdef_mg5.dat" -path "*/SubProcesses/*" 2>/dev/null | head -1 || true)
+    fi
+
+    if [ -z "$PROCDEF" ]; then
+        log "FATAL: procdef_mg5.dat not found for output $EXPECTED_DIR"
+        RESOLVED_OUTPUT_DIR=""
+        return 1
+    fi
+
+    RESOLVED_OUTPUT_DIR=$(dirname "$(dirname "$PROCDEF")")
+    log "  Output dir (verified): $RESOLVED_OUTPUT_DIR"
+}
+
 # =========================== Запуск MG5 теста ===============================
 # run_test <label> <mg5_script> <log_file> <stage_prefix> [timeout]
 #
@@ -249,9 +286,8 @@ EOF
 run_test "t2_madspin_output" "$BENCHMARK_DIR/t2_output.mg5" "$BENCHMARK_DIR/t2_output.log" "t2_madspin_output"
 T2_OUTPUT_TIME=$TEST_TIME
 
-# Резолвим путь (EOS FUSE: /eos/user/k/... -> /eos/home-k/...)
-MADSPIN_OUTPUT_DIR=$(realpath "$MADSPIN_OUTPUT_DIR")
-log "  Resolved MadSpin output dir: $MADSPIN_OUTPUT_DIR"
+resolve_mg5_output "$MADSPIN_OUTPUT_DIR" "$BENCHMARK_DIR/t2_output.log" || exit 1
+MADSPIN_OUTPUT_DIR="$RESOLVED_OUTPUT_DIR"
 
 # 2b: launch с разным числом событий (каждый раз из готового output)
 for NEV in 10 100 10000; do
@@ -295,9 +331,8 @@ EOF
 run_test "t3_cascade_output" "$BENCHMARK_DIR/t3_output.mg5" "$BENCHMARK_DIR/t3_output.log" "t3_cascade_output" 3600
 T3_OUTPUT_TIME=$TEST_TIME
 
-# Резолвим путь (EOS FUSE: /eos/user/k/... -> /eos/home-k/...)
-CASCADE_OUTPUT_DIR=$(realpath "$CASCADE_OUTPUT_DIR")
-log "  Resolved cascade output dir: $CASCADE_OUTPUT_DIR"
+resolve_mg5_output "$CASCADE_OUTPUT_DIR" "$BENCHMARK_DIR/t3_output.log" || exit 1
+CASCADE_OUTPUT_DIR="$RESOLVED_OUTPUT_DIR"
 
 # 3b: launch с разным числом событий (каждый раз из готового output)
 for NEV in 10 100 10000; do

@@ -100,6 +100,37 @@ stage_resource_summary() {
         }' "$RESOURCE_LOG"
 }
 
+# =========================== Resolve MG5 output dir =========================
+resolve_mg5_output() {
+    local EXPECTED_DIR="$1"
+    local MG5_LOG="$2"
+    local PROCDEF=""
+
+    for CAND in "$EXPECTED_DIR" "$(realpath "$EXPECTED_DIR" 2>/dev/null)"; do
+        [ -f "$CAND/SubProcesses/procdef_mg5.dat" ] && { PROCDEF="$CAND/SubProcesses/procdef_mg5.dat"; break; }
+    done
+
+    if [ -z "$PROCDEF" ]; then
+        local MG5_DIR_FROM_LOG
+        MG5_DIR_FROM_LOG=$(grep -oP 'Output to directory\s+\K\S+' "$MG5_LOG" 2>/dev/null | tail -1 || true)
+        [ -n "$MG5_DIR_FROM_LOG" ] && [ -f "$MG5_DIR_FROM_LOG/SubProcesses/procdef_mg5.dat" ] && \
+            PROCDEF="$MG5_DIR_FROM_LOG/SubProcesses/procdef_mg5.dat"
+    fi
+
+    if [ -z "$PROCDEF" ]; then
+        PROCDEF=$(find "$(dirname "$EXPECTED_DIR")" -name "procdef_mg5.dat" -path "*/SubProcesses/*" 2>/dev/null | head -1 || true)
+    fi
+
+    if [ -z "$PROCDEF" ]; then
+        log "FATAL: procdef_mg5.dat not found for output $EXPECTED_DIR"
+        RESOLVED_OUTPUT_DIR=""
+        return 1
+    fi
+
+    RESOLVED_OUTPUT_DIR=$(dirname "$(dirname "$PROCDEF")")
+    log "  Output dir (verified): $RESOLVED_OUTPUT_DIR"
+}
+
 # =========================== Запуск MG5 теста ===============================
 # run_test <label> <mg5_script> <log_file> <stage_prefix> [timeout]
 #
@@ -231,18 +262,8 @@ EOF
 run_test "cascade_output" "$BENCHMARK_DIR/phase1_output.mg5" "$BENCHMARK_DIR/phase1_output.log" "phase1_output" 7200
 OUTPUT_TIME=$TEST_TIME
 
-# Резолвим путь (EOS FUSE: /eos/user/k/... -> /eos/home-k/...)
-CASCADE_DIR=$(realpath "$CASCADE_DIR")
-log "  Resolved output dir: $CASCADE_DIR"
-
-# Проверяем что output успешен
-if [ ! -f "$CASCADE_DIR/SubProcesses/procdef_mg5.dat" ]; then
-    log "FATAL: Output failed — procdef_mg5.dat not found at $CASCADE_DIR/SubProcesses/"
-    log "Cannot proceed with launch tests."
-    exit 1
-fi
-
-log "  Output verified: procdef_mg5.dat exists"
+resolve_mg5_output "$CASCADE_DIR" "$BENCHMARK_DIR/phase1_output.log" || exit 1
+CASCADE_DIR="$RESOLVED_OUTPUT_DIR"
 
 # ============================================================================
 # PHASE 2: Launch при разном числе событий
