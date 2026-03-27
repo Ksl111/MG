@@ -2,8 +2,7 @@
 ###############################################################################
 # benchmark_cascade.sh
 #
-# Расширенный бенчмарк каскадного расчёта:
-#   p p > go go, go > t t~ grv a  (full matrix element)
+# Бенчмарк производства глюино: p p > go go  (без распада)
 #
 # Этапы:
 #   1. Output (generate + compile) — один раз
@@ -11,7 +10,6 @@
 #      с извлечением сечения и погрешности
 #
 # Мониторинг: CPU% + RAM (RSS) каждые 2 секунды с привязкой к этапу.
-# Выходные CSV содержат полный временной ряд ресурсов.
 ###############################################################################
 
 set -euo pipefail
@@ -20,12 +18,12 @@ set -euo pipefail
 MG5_DIR="/afs/cern.ch/user/k/kslizhev/public/MG5_aMC_v2_9_24"
 MG5_BIN="$MG5_DIR/bin/mg5_aMC"
 OUTPUT_DIR="/eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams"
-BENCHMARK_DIR="$OUTPUT_DIR/benchmark_cascade"
+BENCHMARK_DIR="$OUTPUT_DIR/benchmark_production"
 
-RESULTS_FILE="$BENCHMARK_DIR/cascade_results.txt"
-CSV_TIMING="$BENCHMARK_DIR/cascade_timing.csv"
-CSV_XSEC="$BENCHMARK_DIR/cascade_xsections.csv"
-RESOURCE_LOG="$BENCHMARK_DIR/cascade_resource_trace.csv"
+RESULTS_FILE="$BENCHMARK_DIR/production_results.txt"
+CSV_TIMING="$BENCHMARK_DIR/production_timing.csv"
+CSV_XSEC="$BENCHMARK_DIR/production_xsections.csv"
+RESOURCE_LOG="$BENCHMARK_DIR/production_resource_trace.csv"
 
 NEVENTS_LIST=(10 50 100 500 1000 5000 10000)
 
@@ -87,7 +85,6 @@ set_stage() {
     log "  >> Stage: $1"
 }
 
-# avg_cpu peak_cpu avg_ram_kb peak_ram_kb sample_count
 stage_resource_summary() {
     local STAGE="$1"
     awk -F',' -v st="$STAGE" '
@@ -100,41 +97,7 @@ stage_resource_summary() {
         }' "$RESOURCE_LOG"
 }
 
-# =========================== Resolve MG5 output dir =========================
-resolve_mg5_output() {
-    local EXPECTED_DIR="$1"
-    local MG5_LOG="$2"
-    local PROCDEF=""
-
-    for CAND in "$EXPECTED_DIR" "$(realpath "$EXPECTED_DIR" 2>/dev/null)"; do
-        [ -f "$CAND/SubProcesses/procdef_mg5.dat" ] && { PROCDEF="$CAND/SubProcesses/procdef_mg5.dat"; break; }
-    done
-
-    if [ -z "$PROCDEF" ]; then
-        local MG5_DIR_FROM_LOG
-        MG5_DIR_FROM_LOG=$(grep -oP 'Output to directory\s+\K\S+' "$MG5_LOG" 2>/dev/null | tail -1 || true)
-        [ -n "$MG5_DIR_FROM_LOG" ] && [ -f "$MG5_DIR_FROM_LOG/SubProcesses/procdef_mg5.dat" ] && \
-            PROCDEF="$MG5_DIR_FROM_LOG/SubProcesses/procdef_mg5.dat"
-    fi
-
-    if [ -z "$PROCDEF" ]; then
-        PROCDEF=$(find "$(dirname "$EXPECTED_DIR")" -name "procdef_mg5.dat" -path "*/SubProcesses/*" 2>/dev/null | head -1 || true)
-    fi
-
-    if [ -z "$PROCDEF" ]; then
-        log "FATAL: procdef_mg5.dat not found for output $EXPECTED_DIR"
-        RESOLVED_OUTPUT_DIR=""
-        return 1
-    fi
-
-    RESOLVED_OUTPUT_DIR=$(dirname "$(dirname "$PROCDEF")")
-    log "  Output dir (verified): $RESOLVED_OUTPUT_DIR"
-}
-
 # =========================== Запуск MG5 теста ===============================
-# run_test <label> <mg5_script> <log_file> <stage_prefix> [timeout]
-#
-# Результат:  TEST_TIME  TEST_STATUS  TEST_DIAGRAMS  TEST_XSEC  TEST_XSEC_ERR
 run_test() {
     local LABEL="$1" SCRIPT="$2" LOGF="$3" STAGE_PFX="$4"
     local TIMEOUT="${5:-7200}"
@@ -153,19 +116,15 @@ run_test() {
     elif [ "$RC" -ne 0 ];   then TEST_STATUS="error(rc=$RC)"
     else                         TEST_STATUS="ok"; fi
 
-    # Диаграммы
     TEST_DIAGRAMS=$(grep -oP '\d+ diagrams?' "$LOGF" 2>/dev/null | paste -sd '; ' || echo "N/A")
     [ -z "$TEST_DIAGRAMS" ] && TEST_DIAGRAMS="N/A"
 
-    # Сечение: ищем "Cross-section :" в логе
     TEST_XSEC=$(grep -oP 'Cross-section\s*:\s*\K[0-9.eE+\-]+' "$LOGF" 2>/dev/null | tail -1 || echo "N/A")
     [ -z "$TEST_XSEC" ] && TEST_XSEC="N/A"
 
-    # Погрешность: ищем "+- X" после сечения
     TEST_XSEC_ERR=$(grep -oP 'Cross-section\s*:.*\+-\s*\K[0-9.eE+\-]+' "$LOGF" 2>/dev/null | tail -1 || echo "N/A")
     [ -z "$TEST_XSEC_ERR" ] && TEST_XSEC_ERR="N/A"
 
-    # Ресурсы за этот stage
     local RES
     RES=$(stage_resource_summary "${STAGE_PFX}")
     local AVG_CPU PEAK_CPU AVG_RAM PEAK_RAM SAMPLES
@@ -181,7 +140,6 @@ run_test() {
     [ "$TEST_DIAGRAMS" != "N/A" ] && log "  [$LABEL] Diagrams: ${TEST_DIAGRAMS}"
     [ "$TEST_XSEC" != "N/A" ] && log "  [$LABEL] Cross-section: ${TEST_XSEC} +- ${TEST_XSEC_ERR} pb"
 
-    # Ошибки
     local ERRS
     ERRS=$(grep -iE "error|fatal|traceback|exception" "$LOGF" 2>/dev/null | grep -iv "no error" | head -5 || true)
     if [ -n "$ERRS" ]; then
@@ -189,7 +147,6 @@ run_test() {
         echo "$ERRS" | while IFS= read -r line; do log "    > $line"; done
     fi
 
-    # Записываем в текстовый отчёт
     {
         echo "  [$LABEL]"
         echo "    Time:           ${TEST_TIME}s ($TIME_FMT)"
@@ -201,15 +158,12 @@ run_test() {
         echo ""
     } >> "$RESULTS_FILE"
 
-    # CSV timing
     echo "${LABEL},${STAGE_PFX},${TEST_TIME},${AVG_CPU},${PEAK_CPU},${AVG_RAM},${PEAK_RAM},${TEST_STATUS}" >> "$CSV_TIMING"
 }
 
 # =========================== Cleanup ========================================
 cleanup() {
     stop_resource_monitor
-    log "Cleaning up tmp directories..."
-    rm -rf "$BENCHMARK_DIR"/tmp_* 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -227,7 +181,7 @@ BENCH_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
 cat > "$RESULTS_FILE" <<EOF
 ===============================================================================
-  CASCADE BENCHMARK:  p p > go go, go > t t~ grv a  (full ME)
+  PRODUCTION BENCHMARK:  p p > go go  (gluino pair, no decay)
   Model: GldGrv_UFO
   Date:  $BENCH_DATE
   System: $SYS_CPU CPU cores, $SYS_RAM_FMT RAM
@@ -243,36 +197,82 @@ echo "timestamp,stage,cpu_pct,rss_kb" > "$RESOURCE_LOG"
 start_resource_monitor
 
 # ============================================================================
-# PHASE 1: Output (generate + compile) — один раз
+# PHASE 1: Output + Launch в одном MG5-скрипте (для каждого nevents)
+#
+# Стратегия: MG5 output+launch в одном сеансе, чтобы избежать
+# проблем с EOS FUSE path resolution при повторном launch.
+# Output генерируется один раз (первый запуск), далее reuse.
 # ============================================================================
-log "========== PHASE 1: Output (diagram generation + compilation) =========="
+
+PROC_DIR="$BENCHMARK_DIR/pp_gogo"
+
+# Сначала генерируем output
+log "========== PHASE 1: Output (p p > go go) =========="
 {
     echo "PHASE 1: Output (generate + compile)"
-    echo "  Process: p p > go go, go > t t~ grv a"
+    echo "  Process: p p > go go"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
-CASCADE_DIR="$BENCHMARK_DIR/tmp_cascade_output"
 cat > "$BENCHMARK_DIR/phase1_output.mg5" <<EOF
 import model GldGrv_UFO
-generate p p > go go, go > t t~ grv a
-output $CASCADE_DIR
+generate p p > go go
+output $PROC_DIR
 EOF
 
-run_test "cascade_output" "$BENCHMARK_DIR/phase1_output.mg5" "$BENCHMARK_DIR/phase1_output.log" "phase1_output" 7200
+run_test "output_pp_gogo" "$BENCHMARK_DIR/phase1_output.mg5" "$BENCHMARK_DIR/phase1_output.log" "phase1_output"
 OUTPUT_TIME=$TEST_TIME
 
-resolve_mg5_output "$CASCADE_DIR" "$BENCHMARK_DIR/phase1_output.log" || exit 1
-CASCADE_DIR="$RESOLVED_OUTPUT_DIR"
+# Диагностика: ищем где MG5 реально создал output
+log "  Diagnostics: checking output directory..."
+log "  Expected: $PROC_DIR"
+log "  ls of expected dir:"
+ls -la "$PROC_DIR/" 2>&1 | head -5 | while IFS= read -r line; do log "    $line"; done
+log "  ls SubProcesses:"
+ls "$PROC_DIR/SubProcesses/" 2>&1 | head -5 | while IFS= read -r line; do log "    $line"; done
+
+# Также проверяем resolved path
+RESOLVED_DIR=$(realpath "$PROC_DIR" 2>/dev/null || echo "$PROC_DIR")
+if [ "$RESOLVED_DIR" != "$PROC_DIR" ]; then
+    log "  Resolved via realpath: $RESOLVED_DIR"
+    log "  ls of resolved dir:"
+    ls -la "$RESOLVED_DIR/" 2>&1 | head -5 | while IFS= read -r line; do log "    $line"; done
+fi
+
+# Ищем procdef_mg5.dat
+FOUND_PROCDEF=$(find "$BENCHMARK_DIR" -name "procdef_mg5.dat" 2>/dev/null | head -3)
+if [ -n "$FOUND_PROCDEF" ]; then
+    log "  Found procdef_mg5.dat at:"
+    echo "$FOUND_PROCDEF" | while IFS= read -r line; do log "    $line"; done
+    # Берём директорию из первого найденного
+    PROC_DIR=$(dirname "$(dirname "$(echo "$FOUND_PROCDEF" | head -1)")")
+    log "  Using output dir: $PROC_DIR"
+else
+    # Ищем "Output to directory" в логе MG5
+    MG5_OUTPUT_LINE=$(grep -i "Output to directory" "$BENCHMARK_DIR/phase1_output.log" 2>/dev/null || true)
+    log "  MG5 output line from log: $MG5_OUTPUT_LINE"
+
+    # Пробуем извлечь путь из лога
+    MG5_REAL_DIR=$(grep -oP 'Output to directory\s+\K\S+' "$BENCHMARK_DIR/phase1_output.log" 2>/dev/null | tail -1 || true)
+    if [ -n "$MG5_REAL_DIR" ] && [ -d "$MG5_REAL_DIR" ]; then
+        PROC_DIR="$MG5_REAL_DIR"
+        log "  Using dir from MG5 log: $PROC_DIR"
+    else
+        log "  WARNING: Cannot locate output directory. Trying to proceed..."
+    fi
+fi
 
 # ============================================================================
 # PHASE 2: Launch при разном числе событий
+#
+# Каждый launch делается в отдельном MG5-сеансе из готового output.
+# Используем найденный PROC_DIR.
 # ============================================================================
 log "========== PHASE 2: Launch scaling (${NEVENTS_LIST[*]}) =========="
 {
     echo ""
     echo "PHASE 2: Launch with varying nevents"
-    echo "  Output directory (reused): $CASCADE_DIR"
+    echo "  Output directory: $PROC_DIR"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
@@ -280,19 +280,38 @@ for NEV in "${NEVENTS_LIST[@]}"; do
     LABEL="launch_${NEV}ev"
 
     cat > "$BENCHMARK_DIR/${LABEL}.mg5" <<EOF
-launch $CASCADE_DIR
+launch $PROC_DIR
 set nevents $NEV
 0
 EOF
 
-    run_test "$LABEL" "$BENCHMARK_DIR/${LABEL}.mg5" "$BENCHMARK_DIR/${LABEL}.log" "${LABEL}" 14400
+    run_test "$LABEL" "$BENCHMARK_DIR/${LABEL}.mg5" "$BENCHMARK_DIR/${LABEL}.log" "${LABEL}" 7200
 
     echo "${NEV},${TEST_TIME},${TEST_XSEC},${TEST_XSEC_ERR},${TEST_STATUS}" >> "$CSV_XSEC"
 
-    # Прерываем если timeout — дальше будет ещё дольше
+    # Проверяем на ошибку FileNotFoundError — если launch не работает,
+    # пробуем fallback: output+launch в одном скрипте
+    if grep -q "FileNotFoundError\|No such file" "$BENCHMARK_DIR/${LABEL}.log" 2>/dev/null; then
+        log "  [$LABEL] Separate launch failed (path issue). Falling back to combined output+launch..."
+
+        cat > "$BENCHMARK_DIR/${LABEL}_combined.mg5" <<EOF
+import model GldGrv_UFO
+generate p p > go go
+output $BENCHMARK_DIR/tmp_combined_${NEV}
+launch $BENCHMARK_DIR/tmp_combined_${NEV}
+set nevents $NEV
+0
+EOF
+        run_test "${LABEL}_combined" "$BENCHMARK_DIR/${LABEL}_combined.mg5" "$BENCHMARK_DIR/${LABEL}_combined.log" "${LABEL}_combined" 7200
+
+        # Перезаписываем результат в CSV (заменяем последнюю строку)
+        sed -i "$ s/.*/${NEV},${TEST_TIME},${TEST_XSEC},${TEST_XSEC_ERR},${TEST_STATUS}/" "$CSV_XSEC"
+
+        rm -rf "$BENCHMARK_DIR/tmp_combined_${NEV}" 2>/dev/null || true
+    fi
+
     if [ "$TEST_STATUS" = "timeout" ]; then
         log "  WARNING: Timeout at nevents=$NEV. Skipping larger runs."
-        # Записываем оставшиеся как skipped
         SKIP=false
         for REMAINING_NEV in "${NEVENTS_LIST[@]}"; do
             if [ "$SKIP" = true ]; then
@@ -308,9 +327,6 @@ EOF
         break
     fi
 done
-
-# Cleanup output directory
-rm -rf "$CASCADE_DIR"
 
 # ============================================================================
 # Останавливаем монитор
@@ -353,7 +369,7 @@ BENCH_TOTAL=$((BENCH_END - BENCH_START))
 # ============================================================================
 {
     echo "==============================================================================="
-    echo "  CROSS-SECTION vs NEVENTS  (cascade: p p > go go, go > t t~ grv a)"
+    echo "  CROSS-SECTION vs NEVENTS  (p p > go go)"
     echo "==============================================================================="
     echo ""
     printf "  %8s | %12s | %18s | %18s | %s\n" \
@@ -373,9 +389,8 @@ BENCH_TOTAL=$((BENCH_END - BENCH_START))
                "$NEV" "$TIME_FMT" "$XSEC" "$XERR" "$STATUS"
     done
     echo ""
-    echo "  Ожидание: сечение не зависит от nevents (определяется интеграцией)."
+    echo "  Сечение не должно зависеть от nevents (определяется интеграцией)."
     echo "  Вариации — статистическая погрешность Monte Carlo."
-    echo "  Время launch растёт с nevents (больше точек фазового пространства)."
     echo ""
 } | tee -a "$RESULTS_FILE"
 
@@ -422,4 +437,4 @@ BENCH_TOTAL=$((BENCH_END - BENCH_START))
     echo "==============================================================================="
 } | tee -a "$RESULTS_FILE"
 
-log "Cascade benchmark complete. Results: $RESULTS_FILE"
+log "Production benchmark complete. Results: $RESULTS_FILE"
