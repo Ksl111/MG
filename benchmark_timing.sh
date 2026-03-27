@@ -199,9 +199,6 @@ trap cleanup EXIT
 #                         НАЧАЛО БЕНЧМАРКОВ
 # ============================================================================
 
-# --- Удаляем предыдущие результаты ---
-log "Cleaning previous benchmark results in $BENCHMARK_DIR ..."
-rm -rf "$BENCHMARK_DIR" 2>/dev/null || true
 mkdir -p "$BENCHMARK_DIR"
 
 # --- Системная информация ---
@@ -252,6 +249,10 @@ EOF
 run_test "t2_madspin_output" "$BENCHMARK_DIR/t2_output.mg5" "$BENCHMARK_DIR/t2_output.log" "t2_madspin_output"
 T2_OUTPUT_TIME=$TEST_TIME
 
+# Резолвим путь (EOS FUSE: /eos/user/k/... -> /eos/home-k/...)
+MADSPIN_OUTPUT_DIR=$(realpath "$MADSPIN_OUTPUT_DIR")
+log "  Resolved MadSpin output dir: $MADSPIN_OUTPUT_DIR"
+
 # 2b: launch с разным числом событий (каждый раз из готового output)
 for NEV in 10 100 10000; do
     LABEL="t2_madspin_${NEV}ev"
@@ -293,6 +294,10 @@ output $CASCADE_OUTPUT_DIR
 EOF
 run_test "t3_cascade_output" "$BENCHMARK_DIR/t3_output.mg5" "$BENCHMARK_DIR/t3_output.log" "t3_cascade_output" 3600
 T3_OUTPUT_TIME=$TEST_TIME
+
+# Резолвим путь (EOS FUSE: /eos/user/k/... -> /eos/home-k/...)
+CASCADE_OUTPUT_DIR=$(realpath "$CASCADE_OUTPUT_DIR")
+log "  Resolved cascade output dir: $CASCADE_OUTPUT_DIR"
 
 # 3b: launch с разным числом событий (каждый раз из готового output)
 for NEV in 10 100 10000; do
