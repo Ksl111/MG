@@ -25,7 +25,7 @@ CSV_TIMING="$BENCHMARK_DIR/cascade_decay_timing.csv"
 CSV_XSEC="$BENCHMARK_DIR/cascade_decay_xsections.csv"
 RESOURCE_LOG="$BENCHMARK_DIR/cascade_decay_resource_trace.csv"
 
-NEVENTS_LIST=(10 50 100 500 1000 5000 10000)
+NEVENTS_LIST=(10 50 100 500 1000 5000 10000 100000 1000000 10000000)
 
 # =========================== Утилиты ========================================
 log() { echo "[$(date '+%H:%M:%S')] $1"; }
