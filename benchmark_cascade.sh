@@ -2,7 +2,7 @@
 ###############################################################################
 # benchmark_cascade.sh
 #
-# Бенчмарк производства глюино: p p > go go  (без распада)
+# Бенчмарк каскадного распада: p p > go go, go > t t~ grv a
 #
 # Этапы:
 #   1. Output (generate + compile) — один раз
@@ -18,12 +18,12 @@ set -euo pipefail
 MG5_DIR="/afs/cern.ch/user/k/kslizhev/public/MG5_aMC_v2_9_24"
 MG5_BIN="$MG5_DIR/bin/mg5_aMC"
 OUTPUT_DIR="/eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams"
-BENCHMARK_DIR="$OUTPUT_DIR/benchmark_production"
+BENCHMARK_DIR="$OUTPUT_DIR/benchmark_cascade_decay"
 
-RESULTS_FILE="$BENCHMARK_DIR/production_results.txt"
-CSV_TIMING="$BENCHMARK_DIR/production_timing.csv"
-CSV_XSEC="$BENCHMARK_DIR/production_xsections.csv"
-RESOURCE_LOG="$BENCHMARK_DIR/production_resource_trace.csv"
+RESULTS_FILE="$BENCHMARK_DIR/cascade_decay_results.txt"
+CSV_TIMING="$BENCHMARK_DIR/cascade_decay_timing.csv"
+CSV_XSEC="$BENCHMARK_DIR/cascade_decay_xsections.csv"
+RESOURCE_LOG="$BENCHMARK_DIR/cascade_decay_resource_trace.csv"
 
 NEVENTS_LIST=(10 50 100 500 1000 5000 10000)
 
@@ -181,7 +181,7 @@ BENCH_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
 cat > "$RESULTS_FILE" <<EOF
 ===============================================================================
-  PRODUCTION BENCHMARK:  p p > go go  (gluino pair, no decay)
+  CASCADE DECAY BENCHMARK:  p p > go go, go > t t~ grv a
   Model: GldGrv_UFO
   Date:  $BENCH_DATE
   System: $SYS_CPU CPU cores, $SYS_RAM_FMT RAM
@@ -204,19 +204,19 @@ start_resource_monitor
 # Output генерируется один раз (первый запуск), далее reuse.
 # ============================================================================
 
-PROC_DIR="$BENCHMARK_DIR/pp_gogo"
+PROC_DIR="$BENCHMARK_DIR/pp_gogo_cascade"
 
 # Сначала генерируем output
-log "========== PHASE 1: Output (p p > go go) =========="
+log "========== PHASE 1: Output (p p > go go, go > t t~ grv a) =========="
 {
     echo "PHASE 1: Output (generate + compile)"
-    echo "  Process: p p > go go"
+    echo "  Process: p p > go go, go > t t~ grv a"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
 cat > "$BENCHMARK_DIR/phase1_output.mg5" <<EOF
 import model GldGrv_UFO
-generate p p > go go
+generate p p > go go, go > t t~ grv a
 output $PROC_DIR
 EOF
 
@@ -296,7 +296,7 @@ EOF
 
         cat > "$BENCHMARK_DIR/${LABEL}_combined.mg5" <<EOF
 import model GldGrv_UFO
-generate p p > go go
+generate p p > go go, go > t t~ grv a
 output $BENCHMARK_DIR/tmp_combined_${NEV}
 launch $BENCHMARK_DIR/tmp_combined_${NEV}
 set nevents $NEV
@@ -369,7 +369,7 @@ BENCH_TOTAL=$((BENCH_END - BENCH_START))
 # ============================================================================
 {
     echo "==============================================================================="
-    echo "  CROSS-SECTION vs NEVENTS  (p p > go go)"
+    echo "  CROSS-SECTION vs NEVENTS  (p p > go go, go > t t~ grv a)"
     echo "==============================================================================="
     echo ""
     printf "  %8s | %12s | %18s | %18s | %s\n" \
@@ -437,4 +437,4 @@ BENCH_TOTAL=$((BENCH_END - BENCH_START))
     echo "==============================================================================="
 } | tee -a "$RESULTS_FILE"
 
-log "Production benchmark complete. Results: $RESULTS_FILE"
+log "Cascade decay benchmark complete. Results: $RESULTS_FILE"
