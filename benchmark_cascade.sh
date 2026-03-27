@@ -20,10 +20,7 @@ MG5_BIN="$MG5_DIR/bin/mg5_aMC"
 OUTPUT_DIR="/eos/user/k/kslizhev/MC_code/SUSY+GRV_diagrams"
 BENCHMARK_DIR="$OUTPUT_DIR/benchmark_cascade_decay"
 
-# Готовый output с предыдущего запуска (combined fallback создал его)
-EOS_OUTPUT_DIR="$BENCHMARK_DIR/tmp_combined_10"
-
-# Локальная копия output (обход EOS FUSE realpath бага)
+# Свежий output генерируется в /tmp (обход EOS FUSE + гарантия procdef_mg5.dat)
 LOCAL_OUTPUT_DIR="/tmp/mg5_cascade_output_$$"
 
 RESULTS_FILE="$BENCHMARK_DIR/cascade_decay_results.txt"
@@ -205,63 +202,55 @@ echo "timestamp,stage,cpu_pct,rss_kb" > "$RESOURCE_LOG"
 start_resource_monitor
 
 # ============================================================================
-# PHASE 1: Подготовка output-директории
+# PHASE 1: Генерация СВЕЖЕГО output в /tmp
 #
-# MG5 Python внутри launch делает os.path.realpath(), что на EOS FUSE
+# MG5 launch требует procdef_mg5.dat в SubProcesses/, но этот файл
+# удаляется после первого launch. Нельзя повторно использовать
+# уже запущенный output (например, tmp_combined_10 на EOS).
+#
+# Также MG5 Python делает os.path.realpath(), что на EOS FUSE
 # превращает /eos/user/k/... в /eos/home-k/... и ломает open().
-# Решение: копируем output в /tmp (локальная ФС, без symlink-проблем).
+#
+# Решение: ВСЕГДА генерируем свежий output в /tmp (занимает ~35 мин,
+# но это единственный способ получить рабочий output).
 # ============================================================================
-log "========== PHASE 1: Preparing output directory =========="
+log "========== PHASE 1: Generating fresh output to /tmp =========="
 
-# Проверяем существующий output на EOS
-if [ -d "$EOS_OUTPUT_DIR/SubProcesses" ]; then
-    log "  Found existing output at: $EOS_OUTPUT_DIR"
+log "  Output target: $LOCAL_OUTPUT_DIR"
+log "  Generating output from scratch (this takes ~35 min)..."
+log "  Process: p p > go go, go > t t~ grv a"
 
-    # Копируем в /tmp для обхода EOS FUSE бага
-    log "  Copying to local: $LOCAL_OUTPUT_DIR ..."
-    set_stage "copy_to_local"
-    COPY_START=$(date +%s)
-    cp -a "$EOS_OUTPUT_DIR" "$LOCAL_OUTPUT_DIR"
-    COPY_END=$(date +%s)
-    COPY_TIME=$((COPY_END - COPY_START))
-    log "  Copy done in ${COPY_TIME}s"
-
-    OUTPUT_TIME=0  # output не генерировался заново
-else
-    log "  No existing output at $EOS_OUTPUT_DIR"
-    log "  Generating output from scratch (this takes ~35 min)..."
-
-    # Генерируем в /tmp напрямую — без EOS
-    cat > "$BENCHMARK_DIR/phase1_output.mg5" <<EOF
+# Генерируем в /tmp напрямую — без EOS, свежий output с procdef_mg5.dat
+cat > "$BENCHMARK_DIR/phase1_output.mg5" <<EOF
 import model GldGrv_UFO
 generate p p > go go, go > t t~ grv a
 output $LOCAL_OUTPUT_DIR
 EOF
 
-    run_test "output_generate" "$BENCHMARK_DIR/phase1_output.mg5" "$BENCHMARK_DIR/phase1_output.log" "phase1_output" 7200
-    OUTPUT_TIME=$TEST_TIME
+run_test "output_generate" "$BENCHMARK_DIR/phase1_output.mg5" "$BENCHMARK_DIR/phase1_output.log" "phase1_output" 7200
+OUTPUT_TIME=$TEST_TIME
+
+if [ "$TEST_STATUS" != "ok" ]; then
+    log "FATAL: Output generation failed with status: $TEST_STATUS"
+    log "  Check log: $BENCHMARK_DIR/phase1_output.log"
+    tail -20 "$BENCHMARK_DIR/phase1_output.log" 2>/dev/null | while IFS= read -r line; do log "    $line"; done
+    exit 1
 fi
 
-# Проверяем что output корректен (P1_* — скомпилированный процесс;
-# procdef_mg5.dat удаляется MG5 после первого launch, его может не быть)
-PROC_DIRS=$(find "$LOCAL_OUTPUT_DIR/SubProcesses" -maxdepth 1 -type d -name "P*_*" 2>/dev/null | head -3)
-if [ -n "$PROC_DIRS" ]; then
-    log "  Verified: process subdirectories found in SubProcesses/:"
-    echo "$PROC_DIRS" | while IFS= read -r line; do log "    $(basename "$line")"; done
-elif [ -f "$LOCAL_OUTPUT_DIR/SubProcesses/procdef_mg5.dat" ]; then
-    log "  Verified: procdef_mg5.dat exists (fresh output, not yet launched)"
+# Проверяем что procdef_mg5.dat существует (обязателен для launch)
+if [ -f "$LOCAL_OUTPUT_DIR/SubProcesses/procdef_mg5.dat" ]; then
+    log "  Verified: procdef_mg5.dat exists (fresh output, ready for launch)"
 else
-    log "FATAL: No process directories (P*_*) or procdef_mg5.dat in SubProcesses/"
+    log "FATAL: procdef_mg5.dat NOT found after output generation!"
     log "  ls $LOCAL_OUTPUT_DIR/SubProcesses/:"
     ls "$LOCAL_OUTPUT_DIR/SubProcesses/" 2>&1 | head -20 | while IFS= read -r line; do log "    $line"; done
     exit 1
 fi
 
 {
-    echo "PHASE 1: Output preparation"
-    echo "  Source:  $EOS_OUTPUT_DIR"
-    echo "  Local:   $LOCAL_OUTPUT_DIR"
-    [ "$OUTPUT_TIME" -gt 0 ] && echo "  Generated in: $(format_time $OUTPUT_TIME)"
+    echo "PHASE 1: Output generation (fresh, to /tmp)"
+    echo "  Target:  $LOCAL_OUTPUT_DIR"
+    echo "  Generated in: $(format_time $OUTPUT_TIME)"
     echo "-----------------------------------------------------------"
 } >> "$RESULTS_FILE"
 
