@@ -242,14 +242,17 @@ EOF
     OUTPUT_TIME=$TEST_TIME
 fi
 
-# Проверяем что output корректен
-if [ -f "$LOCAL_OUTPUT_DIR/SubProcesses/procdef_mg5.dat" ]; then
-    log "  Verified: procdef_mg5.dat exists at $LOCAL_OUTPUT_DIR/SubProcesses/"
+# Проверяем что output корректен (P1_* — скомпилированный процесс;
+# procdef_mg5.dat удаляется MG5 после первого launch, его может не быть)
+PROC_DIRS=$(find "$LOCAL_OUTPUT_DIR/SubProcesses" -maxdepth 1 -type d -name "P*_*" 2>/dev/null | head -3)
+if [ -n "$PROC_DIRS" ]; then
+    log "  Verified: process subdirectories found in SubProcesses/:"
+    echo "$PROC_DIRS" | while IFS= read -r line; do log "    $(basename "$line")"; done
+elif [ -f "$LOCAL_OUTPUT_DIR/SubProcesses/procdef_mg5.dat" ]; then
+    log "  Verified: procdef_mg5.dat exists (fresh output, not yet launched)"
 else
-    log "FATAL: procdef_mg5.dat not found at $LOCAL_OUTPUT_DIR/SubProcesses/"
-    log "  ls $LOCAL_OUTPUT_DIR/:"
-    ls -la "$LOCAL_OUTPUT_DIR/" 2>&1 | while IFS= read -r line; do log "    $line"; done
-    log "  ls SubProcesses/:"
+    log "FATAL: No process directories (P*_*) or procdef_mg5.dat in SubProcesses/"
+    log "  ls $LOCAL_OUTPUT_DIR/SubProcesses/:"
     ls "$LOCAL_OUTPUT_DIR/SubProcesses/" 2>&1 | head -20 | while IFS= read -r line; do log "    $line"; done
     exit 1
 fi
